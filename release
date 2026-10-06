@@ -2,13 +2,18 @@
 
 set -o pipefail
 
-if [ ! "$PASSWORD" ]; then
-    echo set app-specific password in PASSWORD env var
+# Notarization credentials: either a notarytool keychain profile
+# (xcrun notarytool store-credentials) in NOTARY_PROFILE, or APPLE_ID + TEAM + PASSWORD
+# (app-specific password).
+if [ "$NOTARY_PROFILE" ]; then
+    NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+elif [ "$APPLE_ID" ] && [ "$TEAM" ] && [ "$PASSWORD" ]; then
+    NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$PASSWORD" --team-id "$TEAM")
+else
+    echo "set NOTARY_PROFILE, or APPLE_ID, TEAM and PASSWORD env vars"
     exit 1
 fi
 
-USERNAME=takeshi.sone@gmail.com
-TEAM=42LGPQYC7M
 APPNAME=BLEUnlock
 
 BASEDIR=$(cd $(dirname $0); pwd)
@@ -30,13 +35,11 @@ notarize() {
 
     rm -f $TMPDIR/upload.zip
     ditto -c -k --keepParent $app $TMPDIR/upload.zip
-    xcrun notarytool submit --apple-id $USERNAME --password "$PASSWORD" $TMPDIR/upload.zip \
-        --team-id $TEAM 2>&1 | tee $TMPDIR/altool.log
+    xcrun notarytool submit "${NOTARY_AUTH[@]}" $TMPDIR/upload.zip 2>&1 | tee $TMPDIR/altool.log
     uuid=$(awk '/ id:/ { print $2; exit }' $TMPDIR/altool.log)
     while true; do
         sleep 2
-        xcrun notarytool info $uuid --apple-id $USERNAME \
-            --password "$PASSWORD" --team-id $TEAM 2>&1 |
+        xcrun notarytool info $uuid "${NOTARY_AUTH[@]}" 2>&1 |
             tee $TMPDIR/altool.log || true
         status=$(grep status: $TMPDIR/altool.log | sed 's/^.*status: *//')
         if [ "$status" ] && [ "$status" != "In Progress" ]; then

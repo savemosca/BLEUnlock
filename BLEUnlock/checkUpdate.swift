@@ -34,7 +34,9 @@ private func doCheckUpdate() {
 
 private func compareVersionsAndNotify(_ latestVersion: String) {
     if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
-        if version != latestVersion {
+        // Only a strictly newer release counts, so local or forked builds with a higher version aren't nagged.
+        let latest = latestVersion.hasPrefix("v") ? String(latestVersion.dropFirst()) : latestVersion
+        if latest.compare(version, options: .numeric) == .orderedDescending {
             notify()
             notified = true
         }
