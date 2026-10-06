@@ -9,15 +9,17 @@ private var db_other: OpaquePointer?
 private func connect() {
     if inited { return }
 
-    if sqlite3_open("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.paired.db", &db_paired) == SQLITE_OK {
+    if sqlite3_open_v2("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.paired.db", &db_paired, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
         print("paired.db open success")
     } else {
+        sqlite3_close(db_paired)
         db_paired = nil
     }
 
-    if sqlite3_open("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.other.db", &db_other) == SQLITE_OK {
+    if sqlite3_open_v2("/Library/Bluetooth/com.apple.MobileBluetooth.ledevices.other.db", &db_other, SQLITE_OPEN_READONLY, nil) == SQLITE_OK {
         print("other.db open success")
     } else {
+        sqlite3_close(db_other)
         db_other = nil
     }
 
@@ -27,6 +29,21 @@ private func connect() {
 struct LEDeviceInfo {
     var name: String?
     var macAddr: String?
+}
+
+private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+// Runs a query with the UUID bound as a parameter and returns the first row's text columns.
+private func queryByUUID(_ db: OpaquePointer, _ sql: String, _ uuid: String, columns: Int32) -> [String?]? {
+    var stmt: OpaquePointer?
+    guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+        print("failed to prepare")
+        return nil
+    }
+    defer { sqlite3_finalize(stmt) }
+    guard sqlite3_bind_text(stmt, 1, uuid, -1, SQLITE_TRANSIENT) == SQLITE_OK else { return nil }
+    guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+    return (0..<columns).map { getStringFromRow(stmt: stmt, index: $0) }
 }
 
 private func getStringFromRow(stmt: OpaquePointer?, index: Int32) -> String? {
@@ -39,17 +56,10 @@ private func getStringFromRow(stmt: OpaquePointer?, index: Int32) -> String? {
 
 private func getPairedDeviceFromUUID(_ uuid: String) -> LEDeviceInfo? {
     guard let db = db_paired else { return nil }
-    var stmt: OpaquePointer?
-    if sqlite3_prepare(db, "SELECT Name, Address, ResolvedAddress FROM PairedDevices where Uuid='\(uuid)'", -1, &stmt, nil) != SQLITE_OK {
-        print("failed to prepare")
-        return nil
-    }
-    if sqlite3_step(stmt) != SQLITE_ROW {
-        return nil
-    }
-    let name = getStringFromRow(stmt: stmt, index: 0)
-    let address = getStringFromRow(stmt: stmt, index: 1)
-    let resolvedAddress = getStringFromRow(stmt: stmt, index: 2)
+    guard let row = queryByUUID(db, "SELECT Name, Address, ResolvedAddress FROM PairedDevices WHERE Uuid = ?", uuid, columns: 3) else { return nil }
+    let name = row[0]
+    let address = row[1]
+    let resolvedAddress = row[2]
     var mac: String? = nil
     if let addr = resolvedAddress ?? address {
         // It's like "Public XX:XX:..." or "Random XX:XX:...", so split by space and take the second one
@@ -63,16 +73,9 @@ private func getPairedDeviceFromUUID(_ uuid: String) -> LEDeviceInfo? {
 
 private func getOtherDeviceFromUUID(_ uuid: String) -> LEDeviceInfo? {
     guard let db = db_other else { return nil }
-    var stmt: OpaquePointer?
-    if sqlite3_prepare(db, "SELECT Name, Address FROM OtherDevices where Uuid='\(uuid)'", -1, &stmt, nil) != SQLITE_OK {
-        print("failed to prepare")
-        return nil
-    }
-    if sqlite3_step(stmt) != SQLITE_ROW {
-        return nil
-    }
-    let name = getStringFromRow(stmt: stmt, index: 0)
-    let address = getStringFromRow(stmt: stmt, index: 1)
+    guard let row = queryByUUID(db, "SELECT Name, Address FROM OtherDevices WHERE Uuid = ?", uuid, columns: 2) else { return nil }
+    let name = row[0]
+    let address = row[1]
     var mac: String? = nil
     if let addr = address {
         // It's like "Public XX:XX:..." or "Random XX:XX:...", so split by space and take the second one

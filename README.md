@@ -139,6 +139,8 @@ On locking and unlocking, BLEUnlock runs a script located here:
 ~/Library/Application Scripts/jp.sone.BLEUnlock/event
 ```
 
+The script must be executable, owned by you and not writable by group or others (e.g. `chmod 755`), otherwise it is not run.
+
 An argument is passed depending on the type of event:
 
 |Event|Argument|

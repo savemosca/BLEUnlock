@@ -176,9 +176,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         completionHandler()
     }
 
+    // Only run a script that is owned by the current user and not writable by group/others,
+    // so that another account can't plant code that runs on every lock/unlock.
+    func isSafeScript(_ file: URL) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path) else { return false }
+        guard attrs[.type] as? FileAttributeType == .typeRegular else { return false }
+        guard (attrs[.ownerAccountID] as? NSNumber)?.uint32Value == getuid() else { return false }
+        guard let perms = (attrs[.posixPermissions] as? NSNumber)?.uint16Value else { return false }
+        return perms & 0o022 == 0
+    }
+
     func runScript(_ arg: String) {
         guard let directory = try? FileManager.default.url(for: .applicationScriptsDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else { return }
         let file = directory.appendingPathComponent("event")
+        guard FileManager.default.isExecutableFile(atPath: file.path) else { return }
+        guard isSafeScript(file) else {
+            print("Refusing to run event script: must be owned by you and not group/world writable")
+            return
+        }
         let process = Process()
         process.executableURL = file
         if let r = lastRSSI {
@@ -258,21 +273,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let src = CGEventSource(stateID: .hidSystemState)
         // Send 20 characters per keyboard event. That seems to be the limit.
         let PER = 20
-        let uniCharCount = string.utf16.count
-        var strIndex = string.utf16.startIndex
-        for offset in stride(from: 0, to: uniCharCount, by: PER) {
-            let pressEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
-            let len = offset + PER < uniCharCount ? PER : uniCharCount - offset
-            let buffer = UnsafeMutablePointer<UniChar>.allocate(capacity: len)
-            for i in 0..<len {
-                buffer[i] = string.utf16[strIndex]
-                strIndex = string.utf16.index(after: strIndex)
+        let chars = Array(string.utf16)
+        for offset in stride(from: 0, to: chars.count, by: PER) {
+            // Never type the password anywhere but the lock screen: if the screen got
+            // unlocked in the meantime (e.g. by Touch ID), it would go to the focused app.
+            guard isScreenLocked() else {
+                print("Screen is no longer locked, aborting password entry")
+                return
             }
-            pressEvent?.keyboardSetUnicodeString(stringLength: len, unicodeString: buffer)
+            let pressEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
+            let chunk = Array(chars[offset..<min(offset + PER, chars.count)])
+            pressEvent?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
             pressEvent?.post(tap: .cghidEventTap)
             CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)?.post(tap: .cghidEventTap)
         }
-        
+
+        guard isScreenLocked() else { return }
         // Return key
         CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: true)?.post(tap: .cghidEventTap)
         CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: false)?.post(tap: .cghidEventTap)
@@ -449,7 +465,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             errorModal("Failed to convert password")
             return nil
         }
-        return String(data: data, encoding: .utf8)!
+        return String(data: data, encoding: .utf8)
     }
     
     @objc func askPassword() {
