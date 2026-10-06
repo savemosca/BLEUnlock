@@ -55,3 +55,7 @@ fastlane/screenshots
 .DS_Store
 
 /archives
+
+# Swift Package regression tests
+.build/
+.swiftpm/

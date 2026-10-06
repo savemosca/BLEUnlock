@@ -1,86 +1,75 @@
-#!/bin/bash -e
+#!/bin/bash
+set -euo pipefail
 
-set -o pipefail
-
-# TEAM: your Apple Developer team ID, used to sign with your "Developer ID Application" certificate.
-# Notarization credentials: either a notarytool keychain profile
-# (xcrun notarytool store-credentials) in NOTARY_PROFILE, or APPLE_ID + PASSWORD
-# (app-specific password).
-if [ ! "$TEAM" ]; then
-    echo "set TEAM env var to your Apple Developer team ID"
+# TEAM: Apple Developer team ID. Use a NOTARY_PROFILE stored by notarytool,
+# or APPLE_ID and PASSWORD (app-specific password). NOTARY_TIMEOUT defaults to 20m.
+if [ -z "${TEAM:-}" ]; then
+    echo "set TEAM env var to your Apple Developer team ID" >&2
     exit 1
 fi
-if [ "$NOTARY_PROFILE" ]; then
+if [ -n "${NOTARY_PROFILE:-}" ]; then
     NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
-elif [ "$APPLE_ID" ] && [ "$PASSWORD" ]; then
+elif [ -n "${APPLE_ID:-}" ] && [ -n "${PASSWORD:-}" ]; then
     NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$PASSWORD" --team-id "$TEAM")
 else
-    echo "set NOTARY_PROFILE, or APPLE_ID and PASSWORD env vars"
+    echo "set NOTARY_PROFILE, or APPLE_ID and PASSWORD env vars" >&2
     exit 1
 fi
 
 APPNAME=BLEUnlock
-
-BASEDIR=$(cd $(dirname $0); pwd)
-BUILDDIR=$BASEDIR/build
-RELEASEDIR=$BUILDDIR/Release
-TMPDIR=$BUILDDIR/tmp
+BASEDIR=$(cd -- "$(dirname -- "$0")" && pwd)
+BUILDDIR="$BASEDIR/build"
+RELEASEDIR="$BUILDDIR/Release"
+RELEASE_TMPDIR="$BUILDDIR/release-tmp"
+mkdir -p "$RELEASE_TMPDIR"
 
 extract_info() {
-    local app=$1
-    local key=$2
-    plutil -p $app/Contents/Info.plist |
-        awk "/$key/ {print \$3}" |
-        sed 's/"//g'
+    /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist"
 }
 
 notarize() {
-    local app=$1
-    local id=$(extract_info $app CFBundleIdentifier)
+    local app="$1"
+    local label="$2"
+    local upload="$RELEASE_TMPDIR/$label.zip"
+    local result="$RELEASE_TMPDIR/$label.json"
+    local status
 
-    rm -f $TMPDIR/upload.zip
-    ditto -c -k --keepParent $app $TMPDIR/upload.zip
-    xcrun notarytool submit "${NOTARY_AUTH[@]}" $TMPDIR/upload.zip 2>&1 | tee $TMPDIR/altool.log
-    uuid=$(awk '/ id:/ { print $2; exit }' $TMPDIR/altool.log)
-    while true; do
-        sleep 2
-        xcrun notarytool info $uuid "${NOTARY_AUTH[@]}" 2>&1 |
-            tee $TMPDIR/altool.log || true
-        status=$(grep status: $TMPDIR/altool.log | sed 's/^.*status: *//')
-        if [ "$status" ] && [ "$status" != "In Progress" ]; then
-            break
-        fi
-    done
-    if [ "$status" != "Accepted" ]; then
-        exit 1
+    ditto -c -k --keepParent "$app" "$upload"
+    if ! xcrun notarytool submit "$upload" "${NOTARY_AUTH[@]}" \
+        --wait --timeout "${NOTARY_TIMEOUT:-20m}" --output-format json > "$result"; then
+        echo "Notarization failed or timed out for $app; see $result" >&2
+        return 1
     fi
-    xcrun stapler staple $app
+    status=$(plutil -extract status raw -o - "$result")
+    if [ "$status" != "Accepted" ]; then
+        echo "Notarization rejected for $app: $status; see $result" >&2
+        return 1
+    fi
+    xcrun stapler staple "$app"
 }
 
-#rm -rf $BUILDDIR
-
-test -d $TMPDIR || mkdir -p $TMPDIR
+xcodebuild \
+    -project "$BASEDIR/BLEUnlock.xcodeproj" \
+    -scheme "$APPNAME" \
+    -configuration Release \
+    -archivePath "$RELEASEDIR/$APPNAME.xcarchive" \
+    CODE_SIGN_IDENTITY="Developer ID Application" \
+    DEVELOPMENT_TEAM="$TEAM" \
+    archive
 
 xcodebuild \
-   -scheme $APPNAME \
-   -archivePath $RELEASEDIR/$APPNAME.xcarchive \
-   CODE_SIGN_IDENTITY="Developer ID Application" \
-   DEVELOPMENT_TEAM=$TEAM \
-   archive
+    -exportArchive \
+    -archivePath "$RELEASEDIR/$APPNAME.xcarchive" \
+    -exportOptionsPlist "$BASEDIR/ExportOptions.plist" \
+    -exportPath "$RELEASEDIR"
 
-xcodebuild \
-   -exportArchive \
-   -archivePath $RELEASEDIR/$APPNAME.xcarchive \
-   -exportOptionsPlist $BASEDIR/ExportOptions.plist \
-   -exportPath $RELEASEDIR
+notarize "$RELEASEDIR/$APPNAME.app/Contents/Library/LoginItems/Launcher.app" launcher
+notarize "$RELEASEDIR/$APPNAME.app" app
 
-notarize $RELEASEDIR/$APPNAME.app/Contents/Library/LoginItems/Launcher.app
-notarize $RELEASEDIR/$APPNAME.app
+version=$(extract_info "$RELEASEDIR/$APPNAME.app" CFBundleShortVersionString)
+ditto -c -k --keepParent "$RELEASEDIR/$APPNAME.app" "$RELEASEDIR/$APPNAME-$version.zip"
 
-version=$(extract_info $RELEASEDIR/$APPNAME.app CFBundleShortVersionString)
-
-ditto -c -k --keepParent $RELEASEDIR/$APPNAME.app $RELEASEDIR/$APPNAME-$version.zip
-
-v=$version-$(extract_info $RELEASEDIR/$APPNAME.app CFBundleVersion)
-mkdir -p archives/$v
-cp -a "$RELEASEDIR/$APPNAME.xcarchive" archives/$v
+build=$(extract_info "$RELEASEDIR/$APPNAME.app" CFBundleVersion)
+archive="$BASEDIR/archives/$version-$build"
+mkdir -p "$archive"
+cp -a "$RELEASEDIR/$APPNAME.xcarchive" "$archive/"

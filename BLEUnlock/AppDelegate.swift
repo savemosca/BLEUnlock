@@ -36,10 +36,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var nowPlayingWasPlaying = false
     var aboutBox: AboutBox? = nil
     var wakeTimer: Timer?
+    private var systemWakeTimer: Timer?
     var manualLock = false
-    var unlockedAt = 0.0
     var inScreensaver = false
     var lastRSSI: Int? = nil
+
+    private lazy var unlockCoordinator = UnlockCoordinator(
+        conditions: { [weak self] in self?.unlockConditions ?? UnlockConditions() },
+        fetchPassword: { [weak self] in self?.fetchPassword(warn: true) },
+        enterPassword: { [weak self] password in self?.fakeKeyStrokes(password) ?? false }
+    )
+
+    private var unlockConditions: UnlockConditions {
+        UnlockConditions(screenLocked: isScreenLocked(), devicePresent: ble.presence,
+                         manualLock: manualLock, unlockingEnabled: ble.unlockRSSI != ble.UNLOCK_DISABLED,
+                         systemSleeping: systemSleep, displaySleeping: displaySleep,
+                         lockOnly: lockOnly, wakeWithoutUnlocking: prefs.bool(forKey: "wakeWithoutUnlocking"),
+                         accessibilityTrusted: AXIsProcessTrusted())
+    }
+
+    private func cancelWakeTimer() {
+        wakeTimer?.invalidate()
+        wakeTimer = nil
+    }
 
     func menuWillOpen(_ menu: NSMenu) {
         if menu == deviceMenu {
@@ -144,6 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 statusItem.button?.image = NSImage(named: "StatusBarConnected")
             }
         } else {
+            lastRSSI = nil
             monitorMenuItem?.title = t("not_detected")
             if (connected) {
                 connected = false
@@ -267,6 +287,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 if displaySleep && !systemSleep && prefs.bool(forKey: "wakeOnProximity") {
                     print("Waking display")
                     wakeDisplay()
+                    cancelWakeTimer()
                     wakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true, block: { _ in
                         print("Retrying waking display")
                         wakeDisplay()
@@ -275,7 +296,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                 tryUnlockScreen()
             }
         } else {
-            if (!isScreenLocked() && ble.lockRSSI != ble.LOCK_DISABLED) {
+            unlockCoordinator.cancel()
+            cancelWakeTimer()
+            if (!systemSleep && !isScreenLocked() && ble.lockRSSI != ble.LOCK_DISABLED) {
                 pauseNowPlaying()
                 lockOrSaveScreen()
                 notifyUser(reason)
@@ -285,7 +308,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
-    func fakeKeyStrokes(_ string: String) {
+    func fakeKeyStrokes(_ string: String) -> Bool {
         let src = CGEventSource(stateID: .hidSystemState)
         // Send 20 characters per keyboard event. That seems to be the limit.
         let PER = 20
@@ -293,21 +316,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         for offset in stride(from: 0, to: chars.count, by: PER) {
             // Never type the password anywhere but the lock screen: if the screen got
             // unlocked in the meantime (e.g. by Touch ID), it would go to the focused app.
-            guard isScreenLocked() else {
-                print("Screen is no longer locked, aborting password entry")
-                return
+            guard unlockConditions.canUnlock else {
+                print("Unlock conditions changed, aborting password entry")
+                return false
             }
-            let pressEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true)
+            guard let pressEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true),
+                  let releaseEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false) else { return false }
             let chunk = Array(chars[offset..<min(offset + PER, chars.count)])
-            pressEvent?.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-            pressEvent?.post(tap: .cghidEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false)?.post(tap: .cghidEventTap)
+            pressEvent.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+            pressEvent.post(tap: .cghidEventTap)
+            releaseEvent.post(tap: .cghidEventTap)
         }
 
-        guard isScreenLocked() else { return }
-        // Return key
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: true)?.post(tap: .cghidEventTap)
-        CGEvent(keyboardEventSource: src, virtualKey: 52, keyDown: false)?.post(tap: .cghidEventTap)
+        guard unlockConditions.canUnlock,
+              let pressReturn = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: true),
+              let releaseReturn = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: false) else { return false }
+        pressReturn.post(tap: .cghidEventTap)
+        releaseReturn.post(tap: .cghidEventTap)
+        return true
     }
 
     func isScreenLocked() -> Bool {
@@ -320,62 +346,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
     
     func tryUnlockScreen() {
-        guard !manualLock else { return }
-        guard ble.presence else { return }
-        guard ble.unlockRSSI != ble.UNLOCK_DISABLED else { return }
-        guard !systemSleep else { return }
-        guard !displaySleep else { return }
-
+        guard unlockConditions.canUnlock else { return }
         if inScreensaver {
-            // In screensaver, make sure Login panel is displayed
             let src = CGEventSource(stateID: .hidSystemState)
-            // Esc key down and up
             CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)?.post(tap: .cghidEventTap)
             CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)?.post(tap: .cghidEventTap)
         }
-
-        guard !lockOnly else { return }
-        guard !self.prefs.bool(forKey: "wakeWithoutUnlocking") else { return }
-
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { _ in
-            guard self.isScreenLocked() else { return }
-            guard let password = self.fetchPassword(warn: true) else { return }
-            
-            print("Entering password")
-            self.unlockedAt = Date().timeIntervalSince1970
-            self.fakeKeyStrokes(password)
-            self.playNowPlaying()
-            self.runScript("unlocked")
-        })
+        unlockCoordinator.requestUnlock()
     }
 
     @objc func onDisplayWake() {
         print("display wake")
-        //unlockedAt = Date().timeIntervalSince1970
         displaySleep = false
-        wakeTimer?.invalidate()
-        wakeTimer = nil
+        cancelWakeTimer()
         tryUnlockScreen()
     }
 
     @objc func onDisplaySleep() {
         print("display sleep")
         displaySleep = true
+        unlockCoordinator.cancel()
+        cancelWakeTimer()
     }
 
     @objc func onSystemWake() {
         print("system wake")
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { _ in
+        systemWakeTimer?.invalidate()
+        systemWakeTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false, block: { [weak self] _ in
+            guard let self = self else { return }
+            self.systemWakeTimer = nil
             print("delayed system wake job")
-            NSApp.setActivationPolicy(.accessory) // Hide Dock icon again
             self.systemSleep = false
+            self.ble.resumeMonitoring()
+            NSApp.setActivationPolicy(.accessory) // Hide Dock icon after restarting scanning
             self.tryUnlockScreen()
         })
+        if let timer = systemWakeTimer { RunLoop.main.add(timer, forMode: .common) }
     }
     
     @objc func onSystemSleep() {
         print("system sleep")
         systemSleep = true
+        systemWakeTimer?.invalidate()
+        systemWakeTimer = nil
+        unlockCoordinator.cancel()
+        cancelWakeTimer()
+        ble.suspendMonitoring()
         // Set activation policy to regular, so the CBCentralManager can scan for peripherals
         // when the Bluetooth will become on again.
         // This enables Dock icon but the screen is off anyway.
@@ -383,23 +399,29 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     @objc func onUnlock() {
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
-            print("onUnlock")
-            if self.lockOnly {
-                // macOS unlocked the screen: fine if the device is nearby, suspicious otherwise.
-                self.runScript(self.ble.presence ? "unlocked" : "intruded")
-                self.playNowPlaying()
-            } else if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
-                if self.ble.unlockRSSI != self.ble.UNLOCK_DISABLED {
-                    self.runScript("intruded")
+        // Consume the automatic attempt at the actual unlock notification.
+        let automatic = unlockCoordinator.didUnlock()
+        if lockOnly {
+            if ble.hasKnownPresence {
+                runScript(ble.presence ? "unlocked" : "intruded")
+            } else {
+                // Apple Watch can unlock before Bluetooth delivers the first post-wake
+                // reading. Allow the same settling time as the original event handler.
+                let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                    guard let self = self else { return }
+                    self.runScript(self.ble.presence ? "unlocked" : "intruded")
                 }
-                self.playNowPlaying()
+                RunLoop.main.add(timer, forMode: .common)
             }
-        })
+        } else if automatic {
+            runScript("unlocked")
+        } else if ble.unlockRSSI != ble.UNLOCK_DISABLED {
+            runScript("intruded")
+        }
+        playNowPlaying()
+        removeLockNotification()
         manualLock = false
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
-            checkUpdate()
-        })
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { _ in checkUpdate() }
     }
 
     @objc func onScreensaverStart() {
@@ -425,6 +447,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func monitorDevice(uuid: UUID) {
+        unlockCoordinator.cancel()
+        cancelWakeTimer()
+        lastRSSI = nil
         connected = false
         statusItem.button?.image = NSImage(named: "StatusBarDisconnected")
         monitorMenuItem?.title = t("not_detected")
@@ -459,13 +484,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
-    func deletePassword() {
+    @discardableResult
+    func deletePassword() -> Bool {
         let query: [String: Any] = [
             String(kSecClass): kSecClassGenericPassword,
             String(kSecAttrAccount): NSUserName(),
             String(kSecAttrService): Bundle.main.bundleIdentifier ?? "BLEUnlock",
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            let info = SecCopyErrorMessageString(status, nil) as String? ?? "Status \(status)"
+            errorModal(t("password_removal_failed"), info: t("password_removal_failed_info") + "\n\n" + info)
+            return false
+        }
+        return true
     }
 
     func fetchPassword(warn: Bool = false) -> String? {
@@ -548,12 +580,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     @objc func setLockRSSI(_ menuItem: NSMenuItem) {
         let value = menuItem.tag
+        unlockCoordinator.cancel()
         prefs.set(value, forKey: "lockRSSI")
         ble.lockRSSI = value
     }
     
     @objc func setUnlockRSSI(_ menuItem: NSMenuItem) {
         let value = menuItem.tag
+        unlockCoordinator.cancel()
         prefs.set(value, forKey: "unlockRSSI")
         ble.unlockRSSI = value
     }
@@ -572,15 +606,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func isLaunchAtLoginEnabled() -> Bool {
         let status = SMAppService.mainApp.status
-        return status == .enabled || status == .requiresApproval
+        return status == .enabled || status == .requiresApproval || legacyLoginItemEnabled
+    }
+
+    private var legacyLoginItemEnabled: Bool {
+        prefs.bool(forKey: "launchAtLogin") && !prefs.bool(forKey: "launchAtLoginMigrated")
+    }
+
+    private func disableLegacyLoginItem() throws {
+        guard let identifier = Bundle.main.bundleIdentifier,
+              SMLoginItemSetEnabled((identifier + ".Launcher") as CFString, false) else {
+            throw NSError(domain: "BLEUnlock.LoginMigration", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not disable the legacy login item. Migration will be retried."])
+        }
     }
 
     @objc func toggleLaunchAtLogin(_ menuItem: NSMenuItem) {
         do {
             if isLaunchAtLoginEnabled() {
-                try SMAppService.mainApp.unregister()
+                if legacyLoginItemEnabled { try disableLegacyLoginItem() }
+                if SMAppService.mainApp.status == .enabled || SMAppService.mainApp.status == .requiresApproval {
+                    try SMAppService.mainApp.unregister()
+                }
+                prefs.set(true, forKey: "launchAtLoginMigrated")
+                prefs.set(false, forKey: "launchAtLogin")
             } else {
                 try SMAppService.mainApp.register()
+                // A newly registered main app does not need legacy migration.
+                prefs.set(true, forKey: "launchAtLoginMigrated")
             }
         } catch {
             errorModal("Failed to change Launch at Login", info: error.localizedDescription)
@@ -596,13 +649,31 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     // Older versions used a helper app registered with the deprecated SMLoginItemSetEnabled.
     // Move users who had it turned on to SMAppService, and remove the legacy helper registration.
     func migrateLaunchAtLogin() {
-        guard prefs.bool(forKey: "launchAtLogin") else { return }
-        guard !prefs.bool(forKey: "launchAtLoginMigrated") else { return }
-        SMLoginItemSetEnabled(Bundle.main.bundleIdentifier! + ".Launcher" as CFString, false)
-        if SMAppService.mainApp.status == .notRegistered {
-            try? SMAppService.mainApp.register()
+        guard prefs.bool(forKey: "launchAtLogin"), !prefs.bool(forKey: "launchAtLoginMigrated") else { return }
+        do {
+            let result = try migrateLoginService(status: {
+                switch SMAppService.mainApp.status {
+                case .enabled: return .enabled
+                case .requiresApproval: return .requiresApproval
+                case .notRegistered: return .notRegistered
+                default: return .unavailable
+                }
+            }, register: {
+                try SMAppService.mainApp.register()
+            }, disableLegacy: {
+                try self.disableLegacyLoginItem()
+            })
+            switch result {
+            case .complete:
+                prefs.set(true, forKey: "launchAtLoginMigrated")
+            case .requiresApproval:
+                SMAppService.openSystemSettingsLoginItems()
+            case .unavailable:
+                errorModal("Failed to migrate Launch at Login", info: "The previous login item has been kept. Migration will be retried.")
+            }
+        } catch {
+            errorModal("Failed to migrate Launch at Login", info: error.localizedDescription)
         }
-        prefs.set(true, forKey: "launchAtLoginMigrated")
     }
 
     @objc func togglePauseNowPlaying(_ menuItem: NSMenuItem) {
@@ -645,11 +716,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     @objc func toggleLockOnly(_ menuItem: NSMenuItem) {
         let value = !lockOnly
+        unlockCoordinator.cancel()
         prefs.set(value, forKey: "lockOnly")
         menuItem.state = value ? .on : .off
         if value {
-            deletePassword()
-            suggestNativeUnlock()
+            if deletePassword() { suggestNativeUnlock() }
         } else {
             if ble.unlockRSSI != ble.UNLOCK_DISABLED && !prefs.bool(forKey: "wakeWithoutUnlocking") && fetchPassword() == nil {
                 askPassword()
@@ -660,6 +731,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     @objc func toggleWakeWithoutUnlocking(_ menuItem: NSMenuItem) {
         let wakeWithoutUnlocking = !prefs.bool(forKey: "wakeWithoutUnlocking")
+        unlockCoordinator.cancel()
         prefs.set(wakeWithoutUnlocking, forKey: "wakeWithoutUnlocking")
         menuItem.state = wakeWithoutUnlocking ? .on : .off
     }
@@ -667,6 +739,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func lockNow() {
         guard !isScreenLocked() else { return }
         manualLock = true
+        unlockCoordinator.cancel()
+        cancelWakeTimer()
         pauseNowPlaying()
         lockOrSaveScreen()
     }
@@ -795,11 +869,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             constructMenu()
         }
         ble.delegate = self
-        if let str = prefs.string(forKey: "device") {
-            if let uuid = UUID(uuidString: str) {
-                monitorDevice(uuid: uuid)
-            }
-        }
         let lockRSSI = prefs.integer(forKey: "lockRSSI")
         if lockRSSI != 0 {
             ble.lockRSSI = lockRSSI
@@ -820,6 +889,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         let lockDelay = prefs.integer(forKey: "lockDelay")
         if lockDelay != 0 {
             ble.proximityTimeout = Double(lockDelay)
+        }
+
+        if let str = prefs.string(forKey: "device") {
+            if let uuid = UUID(uuidString: str) {
+                monitorDevice(uuid: uuid)
+            }
         }
 
         let notificationCenter = UNUserNotificationCenter.current()
@@ -859,5 +934,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
     
     func applicationWillTerminate(_ aNotification: Notification) {
+        unlockCoordinator.cancel()
+        cancelWakeTimer()
+        systemWakeTimer?.invalidate()
+        ble.suspendMonitoring()
     }
 }

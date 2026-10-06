@@ -50,6 +50,16 @@ The app is in `build/Build/Products/Release/BLEUnlock.app`; move it to the Appli
 By default the app is signed ad-hoc, so every rebuild is seen by macOS as a new app and you have to grant Accessibility and Keychain access again.
 To avoid that, sign with a stable identity by adding e.g. `CODE_SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=<your team ID>` to the command above.
 
+Builds do not modify the source version number. Update `CFBundleShortVersionString` and `CFBundleVersion` in `BLEUnlock/Info.plist` explicitly when preparing a release.
+
+### Tests
+
+Run `swift test` for proximity, delayed unlock and login migration regression tests, and `python3 -B -m unittest discover -s Tests -p 'test_*.py'` for release script tests. These tests use simulated time and local stand-ins; they do not access Bluetooth, type passwords or upload releases. CI also builds Debug and Release and checks that builds leave the source files unchanged.
+
+### Preparing a signed release
+
+Run `TEAM=<your team ID> NOTARY_PROFILE=<your notarytool keychain profile> ./release`. Alternatively, set `APPLE_ID` and `PASSWORD` (an app-specific password). The script waits up to 20 minutes per notarization submission, stops on rejection or errors, and writes the responses to `build/release-tmp`. Set `NOTARY_TIMEOUT`, for example `30m`, to change this limit.
+
 ### Releases
 
 Download the zip file from [Releases](https://github.com/savemosca/BLEUnlock/releases), if available, unzip and move to the Applications folder.
@@ -75,6 +85,8 @@ It will be stored safely in Keychain.
 Finally, from the menu bar icon, select *Device*.
 It starts scanning nearby BLE devices.
 Select your device, and you're done!
+
+BLEUnlock requires a valid signal from the selected device before it can unlock. After system sleep it waits for a fresh signal. If Bluetooth becomes unavailable while the Mac is awake, it treats the device as lost and locks the Mac unless locking is disabled.
 
 ## Options
 

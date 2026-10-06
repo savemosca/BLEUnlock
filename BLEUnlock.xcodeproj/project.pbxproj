@@ -24,6 +24,10 @@
 		3DD4B664226C1CF000451B7B /* lowlevel.c in Sources */ = {isa = PBXBuildFile; fileRef = 3DD4B663226C1CF000451B7B /* lowlevel.c */; };
 		3DD4B666226C1DF200451B7B /* BLE.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD4B665226C1DF200451B7B /* BLE.swift */; };
 		3DD4B669226C1E3700451B7B /* login.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3DD4B668226C1E3700451B7B /* login.framework */; };
+		B1E100000000000000000000 /* Scheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000000 /* Scheduler.swift */; };
+		B1E100000000000000000001 /* ProximityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000001 /* ProximityMonitor.swift */; };
+		B1E100000000000000000002 /* UnlockCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000002 /* UnlockCoordinator.swift */; };
+		B1E100000000000000000003 /* LaunchAtLoginMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000003 /* LaunchAtLoginMigration.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -79,6 +83,10 @@
 		B1EFF91622E010F50010DB0A /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/Localizable.strings"; sourceTree = "<group>"; };
 		F749D28C277515C600C78C28 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/AboutBox.strings; sourceTree = "<group>"; };
 		F749D28D277515C600C78C28 /* tr */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = tr; path = tr.lproj/Localizable.strings; sourceTree = "<group>"; };
+		B1E000000000000000000000 /* Scheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Scheduler.swift; path = ../RuntimeLogic/Scheduler.swift; sourceTree = "<group>"; };
+		B1E000000000000000000001 /* ProximityMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProximityMonitor.swift; path = ../RuntimeLogic/ProximityMonitor.swift; sourceTree = "<group>"; };
+		B1E000000000000000000002 /* UnlockCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UnlockCoordinator.swift; path = ../RuntimeLogic/UnlockCoordinator.swift; sourceTree = "<group>"; };
+		B1E000000000000000000003 /* LaunchAtLoginMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LaunchAtLoginMigration.swift; path = ../RuntimeLogic/LaunchAtLoginMigration.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +151,10 @@
 				3DD4B665226C1DF200451B7B /* BLE.swift */,
 				3D6070E126DBC68E00EE4E48 /* LEDeviceInfo.swift */,
 				3DD4B653226C1C3200451B7B /* AppDelegate.swift */,
+				B1E000000000000000000003 /* LaunchAtLoginMigration.swift */,
+				B1E000000000000000000002 /* UnlockCoordinator.swift */,
+				B1E000000000000000000001 /* ProximityMonitor.swift */,
+				B1E000000000000000000000 /* Scheduler.swift */,
 				3DC0BC6922728FF1001145EC /* Info.plist */,
 				3DCAAA7C22ADE9830011A2DA /* checkUpdate.swift */,
 				3DD4B662226C1CEF00451B7B /* lowlevel.h */,
@@ -193,7 +205,6 @@
 				3DD4B64D226C1C3200451B7B /* Frameworks */,
 				3DD4B64E226C1C3200451B7B /* Resources */,
 				3D600A5922701E5D0068FB7B /* CopyFiles */,
-				3D7C0F8022769F1F005A4C43 /* ShellScript */,
 			);
 			buildRules = (
 			);
@@ -291,26 +302,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		3D7C0F8022769F1F005A4C43 /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "buildNumber=$(/usr/libexec/PlistBuddy -c \"Print CFBundleVersion\" \"${PROJECT_DIR}/${INFOPLIST_FILE}\")\nbuildNumber=$(($buildNumber + 1))\n/usr/libexec/PlistBuddy -c \"Set :CFBundleVersion $buildNumber\" \"${PROJECT_DIR}/${INFOPLIST_FILE}\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		3D600A3C22701A5A0068FB7B /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -326,6 +317,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				3DD4B654226C1C3200451B7B /* AppDelegate.swift in Sources */,
+				B1E100000000000000000003 /* LaunchAtLoginMigration.swift in Sources */,
+				B1E100000000000000000002 /* UnlockCoordinator.swift in Sources */,
+				B1E100000000000000000001 /* ProximityMonitor.swift in Sources */,
+				B1E100000000000000000000 /* Scheduler.swift in Sources */,
 				3DD4B666226C1DF200451B7B /* BLE.swift in Sources */,
 				3DD4B664226C1CF000451B7B /* lowlevel.c in Sources */,
 				3DCAAA7D22ADE9830011A2DA /* checkUpdate.swift in Sources */,

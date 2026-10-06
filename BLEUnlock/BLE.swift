@@ -1,6 +1,5 @@
 import Foundation
 import CoreBluetooth
-import Accelerate
 
 let DeviceInformation = CBUUID(string:"180A")
 let ManufacturerName = CBUUID(string:"2A29")
@@ -116,32 +115,42 @@ protocol BLEDelegate {
 }
 
 class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
-    let UNLOCK_DISABLED = 1
-    let LOCK_DISABLED = -100
+    let UNLOCK_DISABLED = ProximityMonitor.unlockDisabled
+    let LOCK_DISABLED = ProximityMonitor.lockDisabled
     var centralMgr : CBCentralManager!
     var devices : [UUID : Device] = [:]
     var delegate: BLEDelegate?
     var scanMode = false
     var monitoredUUID: UUID?
     var monitoredPeripheral: CBPeripheral?
-    var proximityTimer : Timer?
-    var signalTimer: Timer?
-    var presence = false
-    var lockRSSI = -80
-    var unlockRSSI = -60
-    var proximityTimeout = 5.0
-    var signalTimeout = 60.0
+    private let proximity = ProximityMonitor()
+    var presence: Bool { proximity.presence }
+    var hasKnownPresence: Bool { proximity.hasKnownPresence }
+    var lockRSSI: Int {
+        get { proximity.lockRSSI }
+        set { proximity.lockRSSI = newValue }
+    }
+    var unlockRSSI: Int {
+        get { proximity.unlockRSSI }
+        set { proximity.unlockRSSI = newValue }
+    }
+    var proximityTimeout: TimeInterval {
+        get { proximity.proximityTimeout }
+        set { proximity.proximityTimeout = newValue }
+    }
+    var signalTimeout: TimeInterval {
+        get { proximity.signalTimeout }
+        set { proximity.signalTimeout = newValue }
+    }
     var lastReadAt = 0.0
     var powerWarn = true
     var passiveMode = false
     var thresholdRSSI = -70
-    var latestRSSIs: [Double] = []
-    var latestN: Int = 5
     var activeModeTimer : Timer? = nil
     var connectionTimer : Timer? = nil
 
     func scanForPeripherals() {
-        guard !centralMgr.isScanning else { return }
+        guard centralMgr.state == .poweredOn, !systemSleeping, !centralMgr.isScanning else { return }
         centralMgr.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         //print("Start scanning")
     }
@@ -170,32 +179,49 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         scanForPeripherals()
     }
 
+    private var systemSleeping = false
+
+    private func cancelConnectionTimers() {
+        activeModeTimer?.invalidate()
+        activeModeTimer = nil
+        connectionTimer?.invalidate()
+        connectionTimer = nil
+        lastReadAt = 0
+    }
+
     func startMonitor(uuid: UUID) {
+        cancelConnectionTimers()
         if let p = monitoredPeripheral {
             centralMgr.cancelPeripheralConnection(p)
         }
         monitoredUUID = uuid
-        proximityTimer?.invalidate()
-        resetSignalTimer()
-        presence = true
         monitoredPeripheral = nil
-        activeModeTimer?.invalidate()
-        activeModeTimer = nil
+        proximity.start()
+        if systemSleeping {
+            proximity.suspend()
+        } else if centralMgr.state == .poweredOff || centralMgr.state == .unauthorized || centralMgr.state == .unsupported {
+            proximity.bluetoothUnavailable()
+        }
         scanForPeripherals()
     }
 
-    func resetSignalTimer() {
-        signalTimer?.invalidate()
-        signalTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
-            print("Device is lost")
-            self.delegate?.updateRSSI(rssi: nil, active: false)
-            if self.presence {
-                self.presence = false
-                self.delegate?.updatePresence(presence: self.presence, reason: "lost")
-            }
-        })
-        if let timer = signalTimer {
-            RunLoop.main.add(timer, forMode: .common)
+    func suspendMonitoring() {
+        systemSleeping = true
+        proximity.suspend()
+        cancelConnectionTimers()
+        centralMgr.stopScan()
+        if let p = monitoredPeripheral {
+            centralMgr.cancelPeripheralConnection(p)
+        }
+    }
+
+    func resumeMonitoring() {
+        systemSleeping = false
+        proximity.resume()
+        if centralMgr.state == .poweredOn {
+            scanForPeripherals()
+        } else {
+            proximity.bluetoothUnavailable()
         }
     }
 
@@ -203,16 +229,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         switch central.state {
         case .poweredOn:
             print("Bluetooth powered on")
-            if activeModeTimer == nil {
-                scanForPeripherals()
-            }
+            proximity.bluetoothAvailable()
+            if activeModeTimer == nil { scanForPeripherals() }
             powerWarn = false
-        case .poweredOff:
-            print("Bluetooth powered off")
-            presence = false
-            signalTimer?.invalidate()
-            signalTimer = nil
-            if powerWarn {
+        case .poweredOff, .unauthorized, .unsupported, .resetting:
+            print("Bluetooth unavailable")
+            cancelConnectionTimers()
+            proximity.bluetoothUnavailable()
+            if central.state == .poweredOff && powerWarn && !systemSleeping {
                 powerWarn = false
                 delegate?.bluetoothPowerWarn()
             }
@@ -220,54 +244,12 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             break
         }
     }
-    
-    func getEstimatedRSSI(rssi: Int) -> Int {
-        if latestRSSIs.count >= latestN {
-            latestRSSIs.removeFirst()
-        }
-        latestRSSIs.append(Double(rssi))
-        var mean: Double = 0.0
-        var sddev: Double = 0.0
-        vDSP_normalizeD(latestRSSIs, 1, nil, 1, &mean, &sddev, vDSP_Length(latestRSSIs.count))
-        return Int(mean)
-    }
-
-    func updateMonitoredPeripheral(_ rssi: Int) {
-        // print(String(format: "rssi: %d", rssi))
-        if rssi >= (unlockRSSI == UNLOCK_DISABLED ? lockRSSI : unlockRSSI) && !presence {
-            print("Device is close")
-            presence = true
-            delegate?.updatePresence(presence: presence, reason: "close")
-            latestRSSIs.removeAll() // Avoid bouncing
-        }
-
-        let estimatedRSSI = getEstimatedRSSI(rssi: rssi)
-        delegate?.updateRSSI(rssi: estimatedRSSI, active: activeModeTimer != nil)
-
-        if estimatedRSSI >= (lockRSSI == LOCK_DISABLED ? unlockRSSI : lockRSSI) {
-            if let timer = proximityTimer {
-                timer.invalidate()
-                print("Proximity timer canceled")
-                proximityTimer = nil
-            }
-        } else if presence && proximityTimer == nil {
-            proximityTimer = Timer.scheduledTimer(withTimeInterval: proximityTimeout, repeats: false, block: { _ in
-                print("Device is away")
-                self.presence = false
-                self.delegate?.updatePresence(presence: self.presence, reason: "away")
-                self.proximityTimer = nil
-            })
-            RunLoop.main.add(proximityTimer!, forMode: .common)
-            print("Proximity timer started")
-        }
-        resetSignalTimer()
-    }
 
     func resetScanTimer(device: Device) {
         device.scanTimer?.invalidate()
         device.scanTimer = Timer.scheduledTimer(withTimeInterval: signalTimeout, repeats: false, block: { _ in
             self.delegate?.removeDevice(device: device)
-            if let p = device.peripheral {
+            if let p = device.peripheral, p != self.monitoredPeripheral {
                 self.centralMgr.cancelPeripheralConnection(p)
             }
             self.devices.removeValue(forKey: device.uuid)
@@ -278,7 +260,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     func connectMonitoredPeripheral() {
-        guard let p = monitoredPeripheral else { return }
+        guard !systemSleeping, !passiveMode, centralMgr.state == .poweredOn, let p = monitoredPeripheral else { return }
 
         // Idk why but this works like a charm when 'didConnect' won't get called.
         // However, this generates warnings in the log.
@@ -304,7 +286,8 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                         advertisementData: [String : Any],
                         rssi RSSI: NSNumber)
     {
-        let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
+        let rssi = RSSI.intValue
+        guard !systemSleeping, centralMgr.state == .poweredOn, ProximityMonitor.isValidRSSI(rssi) else { return }
         if let uuid = monitoredUUID {
             if peripheral.identifier.description == uuid.description {
                 if monitoredPeripheral == nil {
@@ -312,7 +295,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 }
                 if activeModeTimer == nil {
                     //print("Discover \(rssi)dBm")
-                    updateMonitoredPeripheral(rssi)
+                    proximity.receiveRSSI(rssi)
                     if !passiveMode {
                         connectMonitoredPeripheral()
                     }
@@ -333,14 +316,13 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             var device: Device
             if (dev == nil) {
                 device = Device(uuid: peripheral.identifier)
-                if (rssi >= thresholdRSSI) {
-                    device.peripheral = peripheral
-                    device.rssi = rssi
-                    device.advData = advertisementData["kCBAdvDataManufacturerData"] as? Data
-                    devices[peripheral.identifier] = device
-                    central.connect(peripheral, options: nil)
-                    delegate?.newDevice(device: device)
-                }
+                guard rssi >= thresholdRSSI else { return }
+                device.peripheral = peripheral
+                device.rssi = rssi
+                device.advData = advertisementData["kCBAdvDataManufacturerData"] as? Data
+                devices[peripheral.identifier] = device
+                central.connect(peripheral, options: nil)
+                delegate?.newDevice(device: device)
             } else {
                 device = dev!
                 device.rssi = rssi
@@ -353,6 +335,11 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func centralManager(_ central: CBCentralManager,
                         didConnect peripheral: CBPeripheral)
     {
+        guard !systemSleeping, central.state == .poweredOn,
+              scanMode || (peripheral == monitoredPeripheral && !passiveMode) else {
+            central.cancelPeripheralConnection(peripheral)
+            return
+        }
         peripheral.delegate = self
         if scanMode {
             peripheral.discoverServices([DeviceInformation])
@@ -370,11 +357,12 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     //MARK:- CBPeripheralDelegate start
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
-        guard peripheral == monitoredPeripheral else { return }
-        let rssi = RSSI.intValue > 0 ? 0 : RSSI.intValue
+        guard peripheral == monitoredPeripheral, error == nil else { return }
+        let rssi = RSSI.intValue
+        guard !systemSleeping, centralMgr.state == .poweredOn, ProximityMonitor.isValidRSSI(rssi) else { return }
         //print("readRSSI \(rssi)dBm")
-        updateMonitoredPeripheral(rssi)
-        lastReadAt = Date().timeIntervalSince1970
+        proximity.receiveRSSI(rssi)
+        lastReadAt = ProcessInfo.processInfo.systemUptime
 
         if activeModeTimer == nil && !passiveMode {
             print("Entering active mode")
@@ -382,7 +370,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
                 centralMgr.stopScan()
             }
             activeModeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true, block: { _ in
-                if Date().timeIntervalSince1970 > self.lastReadAt + 10 {
+                if ProcessInfo.processInfo.systemUptime > self.lastReadAt + 10 {
                     print("Falling back to passive mode")
                     self.centralMgr.cancelPeripheralConnection(peripheral)
                     self.activeModeTimer?.invalidate()
@@ -455,6 +443,13 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
     override init() {
         super.init()
+        proximity.onRSSI = { [weak self] rssi in
+            guard let self = self else { return }
+            self.delegate?.updateRSSI(rssi: rssi, active: self.activeModeTimer != nil)
+        }
+        proximity.onPresenceChanged = { [weak self] present, reason in
+            self?.delegate?.updatePresence(presence: present, reason: reason)
+        }
         centralMgr = CBCentralManager(delegate: self, queue: nil)
     }
 }

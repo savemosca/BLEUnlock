@@ -29,6 +29,8 @@
 "password_info" = "Your password will be securely stored in Keychain.";
 "password_info_lock_only_tip" = "Tip: if you have an Apple Watch, you can use \"Lock Only\" mode instead and let macOS unlock your Mac, so your password doesn't need to be stored.";
 "password_not_set" = "Password is not set.";
+"password_removal_failed" = "Could not remove the stored password";
+"password_removal_failed_info" = "Lock Only is enabled and BLEUnlock will not type your password, but the stored password could not be removed from Keychain. Remove the BLEUnlock password in Keychain Access, or restart BLEUnlock to retry.";
 "pause_now_playing" = "Pause \"Now Playing\" while Locked";
 "quit" = "Quit BLEUnlock";
 "scanning" = "Scanning…";
