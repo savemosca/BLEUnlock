@@ -2,15 +2,20 @@
 
 set -o pipefail
 
+# TEAM: your Apple Developer team ID, used to sign with your "Developer ID Application" certificate.
 # Notarization credentials: either a notarytool keychain profile
-# (xcrun notarytool store-credentials) in NOTARY_PROFILE, or APPLE_ID + TEAM + PASSWORD
+# (xcrun notarytool store-credentials) in NOTARY_PROFILE, or APPLE_ID + PASSWORD
 # (app-specific password).
+if [ ! "$TEAM" ]; then
+    echo "set TEAM env var to your Apple Developer team ID"
+    exit 1
+fi
 if [ "$NOTARY_PROFILE" ]; then
     NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
-elif [ "$APPLE_ID" ] && [ "$TEAM" ] && [ "$PASSWORD" ]; then
+elif [ "$APPLE_ID" ] && [ "$PASSWORD" ]; then
     NOTARY_AUTH=(--apple-id "$APPLE_ID" --password "$PASSWORD" --team-id "$TEAM")
 else
-    echo "set NOTARY_PROFILE, or APPLE_ID, TEAM and PASSWORD env vars"
+    echo "set NOTARY_PROFILE, or APPLE_ID and PASSWORD env vars"
     exit 1
 fi
 
@@ -59,6 +64,8 @@ test -d $TMPDIR || mkdir -p $TMPDIR
 xcodebuild \
    -scheme $APPNAME \
    -archivePath $RELEASEDIR/$APPNAME.xcarchive \
+   CODE_SIGN_IDENTITY="Developer ID Application" \
+   DEVELOPMENT_TEAM=$TEAM \
    archive
 
 xcodebuild \

@@ -186,7 +186,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
                                 didReceive response: UNNotificationResponse,
                                 withCompletionHandler completionHandler: @escaping () -> Void) {
         if response.notification.request.identifier == UPDATE_NOTIFICATION_ID {
-            NSWorkspace.shared.open(URL(string: "https://github.com/ts1/BLEUnlock/releases")!)
+            NSWorkspace.shared.open(URL(string: "https://github.com/\(GITHUB_REPO)/releases")!)
             center.removeDeliveredNotifications(withIdentifiers: [UPDATE_NOTIFICATION_ID])
         }
         completionHandler()

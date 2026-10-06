@@ -1,10 +1,16 @@
 # BLEUnlock
 
-## Please note that I don't distribute this app on the Mac App Store. You can find it here for free! 
+![CI](https://github.com/savemosca/BLEUnlock/workflows/CI/badge.svg)
 
-![CI](https://github.com/ts1/BLEUnlock/workflows/CI/badge.svg)
-![Github All Releases](https://img.shields.io/github/downloads/ts1/BLEUnlock/total.svg)
-[![Buy me a coffee](img/buymeacoffee.svg)](https://www.buymeacoffee.com/tsone)
+> This is a maintained fork of [ts1/BLEUnlock](https://github.com/ts1/BLEUnlock) by Takeshi Sone, which is no longer updated.
+> Changes in this fork:
+>
+> - Builds with Xcode 27 and runs on current macOS (requires macOS 13 or later)
+> - Modern APIs for notifications and Launch at Login
+> - **Lock Only** mode: BLEUnlock locks your Mac and leaves unlocking to macOS (e.g. Apple Watch), without storing your password
+> - Security hardening of password entry, event script and Bluetooth database access
+>
+> If you like the original work, you can [buy the original author a coffee](https://www.buymeacoffee.com/tsone).
 
 BLEUnlock is a small menu bar utility that locks and unlocks your Mac by proximity of your iPhone, Apple Watch, or any other Bluetooth Low Energy device.
 
@@ -29,15 +35,26 @@ This document is also available in [Japanese (日本語版はこちら)](README.
 
 ## Installation
 
-### Using Homebrew Cask
+### Build from source
+
+With Xcode installed:
 
 ```
-brew install bleunlock
+git clone https://github.com/savemosca/BLEUnlock.git
+cd BLEUnlock
+xcodebuild -project BLEUnlock.xcodeproj -scheme BLEUnlock -configuration Release -derivedDataPath build
 ```
 
-### Manual installation
+The app is in `build/Build/Products/Release/BLEUnlock.app`; move it to the Applications folder.
 
-Download the zip file from [Releases](https://github.com/ts1/BLEUnlock/releases), unzip and move to the Applications folder.
+By default the app is signed ad-hoc, so every rebuild is seen by macOS as a new app and you have to grant Accessibility and Keychain access again.
+To avoid that, sign with a stable identity by adding e.g. `CODE_SIGN_IDENTITY="Apple Development" DEVELOPMENT_TEAM=<your team ID>` to the command above.
+
+### Releases
+
+Download the zip file from [Releases](https://github.com/savemosca/BLEUnlock/releases), if available, unzip and move to the Applications folder.
+
+> NOTE: `brew install bleunlock` installs the original, unmaintained version, not this fork.
 
 ## Setting up
 

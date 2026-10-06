@@ -1,6 +1,8 @@
 import Cocoa
 import UserNotifications
 
+let GITHUB_REPO = "savemosca/BLEUnlock"
+
 private let KEY = "lastUpdateCheck"
 private let INTERVAL = 24.0 * 60 * 60
 private var notified = false
@@ -14,7 +16,7 @@ func checkUpdate() {
 }
 
 private func doCheckUpdate() {
-    var request = URLRequest(url: URL(string: "https://api.github.com/repos/ts1/BLEUnlock/releases/latest")!)
+    var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(GITHUB_REPO)/releases/latest")!)
     request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
     let task = URLSession.shared.dataTask(with: request, completionHandler: { data, response, error in
         if let jsondata = data {
