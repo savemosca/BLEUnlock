@@ -436,3 +436,32 @@ final class LoginMigrationTests: XCTestCase {
         XCTAssertEqual(result, .unavailable)
     }
 }
+
+final class KeystrokeTests: XCTestCase {
+    // Whether macOS accepts the key at the lock screen is checked by scripts/test-auto-unlock.
+    func testReturnKeySubmitsWithKvkReturn() throws {
+        let key = try XCTUnwrap(keyPress(VirtualKey.returnKey, source: nil))
+        XCTAssertEqual(key.down.type, .keyDown)
+        XCTAssertEqual(key.up.type, .keyUp)
+        XCTAssertEqual(key.down.getIntegerValueField(.keyboardEventKeycode), 0x24)
+        XCTAssertEqual(key.up.getIntegerValueField(.keyboardEventKeycode), 0x24)
+    }
+
+    func testPasswordChunkIsTypedAsUnicodeText() throws {
+        let chunk = Array("pässwörd 1".utf16)
+        let key = try XCTUnwrap(keyPress(VirtualKey.space, text: chunk, source: nil))
+        var length = 0
+        var typed = [UniChar](repeating: 0, count: maxCharactersPerKeyEvent)
+        key.down.keyboardGetUnicodeString(maxStringLength: typed.count, actualStringLength: &length, unicodeString: &typed)
+        XCTAssertEqual(Array(typed[0..<length]), chunk)
+        XCTAssertEqual(key.down.getIntegerValueField(.keyboardEventKeycode), Int64(VirtualKey.space))
+    }
+
+    func testPasswordIsSplitIntoEventSizedChunksInOrder() {
+        let password = String(repeating: "abcdefghij", count: 4) + "xyz"
+        let chunks = passwordChunks(password)
+        XCTAssertEqual(chunks.map(\.count), [20, 20, 3])
+        XCTAssertEqual(String(utf16CodeUnits: chunks.flatMap { $0 }, count: password.utf16.count), password)
+        XCTAssertEqual(passwordChunks(""), [])
+    }
+}

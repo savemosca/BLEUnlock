@@ -1,0 +1,106 @@
+#!/bin/bash
+# Manual end-to-end check that BLEUnlock types the password at the real lock screen and
+# submits it with Return. It needs a person: it turns the display off and you wake it.
+#
+# Pass: BLEUnlock reports the `unlocked` event, which it emits only when macOS unlocks
+# right after it typed the password. Fail: you had to unlock yourself (`intruded`).
+set -euo pipefail
+
+BUNDLE_ID=jp.sone.BLEUnlock
+HOOK_DIR="$HOME/Library/Application Scripts/$BUNDLE_ID"
+HOOK="$HOOK_DIR/event"
+HOOK_TAG="# Temporary hook installed by BLEUnlock scripts/test-auto-unlock"
+LOCK_TIMEOUT=${LOCK_TIMEOUT:-30}
+
+pref() { defaults read "$BUNDLE_ID" "$1" 2>/dev/null || true; }
+screen_locked() { ioreg -n Root -d1 | grep -Eq '"CGSSessionScreenIsLocked"=(Yes|1)'; }
+
+problems=()
+pgrep -xq BLEUnlock || problems+=("BLEUnlock is not running.")
+[ -n "$(pref device)" ] || problems+=("No device selected in BLEUnlock.")
+[ "$(pref lockOnly)" != 1 ] || problems+=("Lock Only is on, so BLEUnlock never types the password. Turn it off from the menu; BLEUnlock will ask for your password.")
+[ "$(pref wakeWithoutUnlocking)" != 1 ] || problems+=("\"Wake without unlocking\" is on. Turn it off from the menu.")
+[ "$(pref unlockRSSI)" != 1 ] || problems+=("Unlock RSSI is Disabled. Choose a value from the menu.")
+security find-generic-password -s "$BUNDLE_ID" -a "$USER" >/dev/null 2>&1 ||
+    problems+=("No password stored in Keychain. Set it from the BLEUnlock menu.")
+if [ ${#problems[@]} -gt 0 ]; then
+    echo "Not ready, nothing was changed:" >&2
+    printf '  - %s\n' "${problems[@]}" >&2
+    exit 2
+fi
+
+results=$(mktemp -d)
+installed_hook=false
+cleanup() {
+    if $installed_hook && grep -qF "$HOOK_TAG" "$HOOK" 2>/dev/null; then rm -f "$HOOK"; fi
+    rm -rf "$results"
+}
+trap cleanup EXIT
+
+if [ -e "$HOOK" ]; then
+    echo "Your event script $HOOK is kept, so the result will be asked instead of detected."
+else
+    mkdir -p "$HOOK_DIR"
+    # shellcheck disable=SC2016 # $1 belongs to the generated hook
+    printf '#!/bin/sh\n%s\necho "$1" >> "%s/events"\n' "$HOOK_TAG" "$results" > "$HOOK"
+    chmod 755 "$HOOK"
+    installed_hook=true
+fi
+
+cat <<'EOF'
+
+Before starting, check that:
+  - your device is next to the Mac and shows a signal in the BLEUnlock menu;
+  - BLEUnlock is allowed in System Settings > Privacy & Security > Accessibility;
+  - System Settings > Lock Screen requires the password immediately after the display turns off.
+
+Then:
+  1. The display turns off 2 seconds after you press Enter.
+  2. Wait 5 seconds, then press Shift once to wake it. Do not type anything else.
+  3. BLEUnlock should type your password and unlock the Mac by itself within a few seconds.
+     If it does not after 15 seconds, unlock yourself; this script then reports the failure.
+
+EOF
+read -r -p "Press Enter to start... "
+sleep 2
+pmset displaysleepnow
+
+for ((i = 0; i < LOCK_TIMEOUT * 2; i++)); do
+    screen_locked && break
+    sleep 0.5
+done
+if ! screen_locked; then
+    echo "FAIL: the screen did not lock within ${LOCK_TIMEOUT}s. Require the password immediately in System Settings > Lock Screen, then retry." >&2
+    exit 1
+fi
+locked_at=$SECONDS
+while screen_locked; do sleep 0.5; done
+elapsed=$((SECONDS - locked_at))
+
+if $installed_hook; then
+    # BLEUnlock reports the unlock event shortly after macOS unlocks.
+    for ((i = 0; i < 10; i++)); do
+        [ -s "$results/events" ] && grep -Eq '^(unlocked|intruded)$' "$results/events" && break
+        sleep 0.5
+    done
+    event=$(grep -E '^(unlocked|intruded)$' "$results/events" 2>/dev/null | tail -1 || true)
+else
+    read -r -p "Did the Mac unlock by itself, without you typing or using Touch ID? [y/N] " answer
+    case "$answer" in [yY]*) event=unlocked ;; *) event=intruded ;; esac
+fi
+
+case "$event" in
+unlocked)
+    echo "PASS: BLEUnlock typed the password and Return unlocked the Mac (locked for ${elapsed}s)."
+    ;;
+intruded)
+    echo "FAIL: the Mac was unlocked manually after ${elapsed}s." >&2
+    echo "  - Password dots appeared but the Mac stayed locked: Return was not accepted." >&2
+    echo "  - Nothing was typed: check Accessibility permission and that the device was detected." >&2
+    exit 1
+    ;;
+*)
+    echo "FAIL: BLEUnlock did not report the unlock. Check that BLEUnlock is running and retry." >&2
+    exit 1
+    ;;
+esac

@@ -56,6 +56,8 @@ Builds do not modify the source version number. Update `CFBundleShortVersionStri
 
 Run `swift test` for proximity, delayed unlock and login migration regression tests, and `python3 -B -m unittest discover -s Tests -p 'test_*.py'` for release script tests. These tests use simulated time and local stand-ins; they do not access Bluetooth, type passwords or upload releases. CI also builds Debug and Release and checks that builds leave the source files unchanged.
 
+To check automatic unlock at the real lock screen, including that the password is submitted with Return, run `scripts/test-auto-unlock` with your device nearby. It needs Lock Only turned off and a stored password, turns the display off, and asks you to wake it with Shift. It reports PASS when BLEUnlock unlocks the Mac by itself, using a temporary event script that it removes afterwards (an existing event script is left untouched and you are asked for the result instead).
+
 ### Preparing a signed release
 
 Run `TEAM=<your team ID> NOTARY_PROFILE=<your notarytool keychain profile> ./release`. Alternatively, set `APPLE_ID` and `PASSWORD` (an app-specific password). The script waits up to 20 minutes per notarization submission, stops on rejection or errors, and writes the responses to `build/release-tmp`. Set `NOTARY_TIMEOUT`, for example `30m`, to change this limit.

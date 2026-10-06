@@ -310,29 +310,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func fakeKeyStrokes(_ string: String) -> Bool {
         let src = CGEventSource(stateID: .hidSystemState)
-        // Send 20 characters per keyboard event. That seems to be the limit.
-        let PER = 20
-        let chars = Array(string.utf16)
-        for offset in stride(from: 0, to: chars.count, by: PER) {
+        for chunk in passwordChunks(string) {
             // Never type the password anywhere but the lock screen: if the screen got
             // unlocked in the meantime (e.g. by Touch ID), it would go to the focused app.
             guard unlockConditions.canUnlock else {
                 print("Unlock conditions changed, aborting password entry")
                 return false
             }
-            guard let pressEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: true),
-                  let releaseEvent = CGEvent(keyboardEventSource: src, virtualKey: 49, keyDown: false) else { return false }
-            let chunk = Array(chars[offset..<min(offset + PER, chars.count)])
-            pressEvent.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
-            pressEvent.post(tap: .cghidEventTap)
-            releaseEvent.post(tap: .cghidEventTap)
+            guard let key = keyPress(VirtualKey.space, text: chunk, source: src) else { return false }
+            key.down.post(tap: .cghidEventTap)
+            key.up.post(tap: .cghidEventTap)
         }
 
         guard unlockConditions.canUnlock,
-              let pressReturn = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: true),
-              let releaseReturn = CGEvent(keyboardEventSource: src, virtualKey: 0x24, keyDown: false) else { return false }
-        pressReturn.post(tap: .cghidEventTap)
-        releaseReturn.post(tap: .cghidEventTap)
+              let returnKey = keyPress(VirtualKey.returnKey, source: src) else { return false }
+        returnKey.down.post(tap: .cghidEventTap)
+        returnKey.up.post(tap: .cghidEventTap)
         return true
     }
 
@@ -348,9 +341,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func tryUnlockScreen() {
         guard unlockConditions.canUnlock else { return }
         if inScreensaver {
-            let src = CGEventSource(stateID: .hidSystemState)
-            CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)?.post(tap: .cghidEventTap)
-            CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)?.post(tap: .cghidEventTap)
+            if let escape = keyPress(VirtualKey.escape, source: CGEventSource(stateID: .hidSystemState)) {
+                escape.down.post(tap: .cghidEventTap)
+                escape.up.post(tap: .cghidEventTap)
+            }
         }
         unlockCoordinator.requestUnlock()
     }

@@ -28,6 +28,7 @@
 		B1E100000000000000000001 /* ProximityMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000001 /* ProximityMonitor.swift */; };
 		B1E100000000000000000002 /* UnlockCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000002 /* UnlockCoordinator.swift */; };
 		B1E100000000000000000003 /* LaunchAtLoginMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000003 /* LaunchAtLoginMigration.swift */; };
+		B1E100000000000000000004 /* Keystrokes.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1E000000000000000000004 /* Keystrokes.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -87,6 +88,7 @@
 		B1E000000000000000000001 /* ProximityMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProximityMonitor.swift; path = ../RuntimeLogic/ProximityMonitor.swift; sourceTree = "<group>"; };
 		B1E000000000000000000002 /* UnlockCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = UnlockCoordinator.swift; path = ../RuntimeLogic/UnlockCoordinator.swift; sourceTree = "<group>"; };
 		B1E000000000000000000003 /* LaunchAtLoginMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LaunchAtLoginMigration.swift; path = ../RuntimeLogic/LaunchAtLoginMigration.swift; sourceTree = "<group>"; };
+		B1E000000000000000000004 /* Keystrokes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Keystrokes.swift; path = ../RuntimeLogic/Keystrokes.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -152,6 +154,7 @@
 				3D6070E126DBC68E00EE4E48 /* LEDeviceInfo.swift */,
 				3DD4B653226C1C3200451B7B /* AppDelegate.swift */,
 				B1E000000000000000000003 /* LaunchAtLoginMigration.swift */,
+				B1E000000000000000000004 /* Keystrokes.swift */,
 				B1E000000000000000000002 /* UnlockCoordinator.swift */,
 				B1E000000000000000000001 /* ProximityMonitor.swift */,
 				B1E000000000000000000000 /* Scheduler.swift */,
@@ -318,6 +321,7 @@
 			files = (
 				3DD4B654226C1C3200451B7B /* AppDelegate.swift in Sources */,
 				B1E100000000000000000003 /* LaunchAtLoginMigration.swift in Sources */,
+				B1E100000000000000000004 /* Keystrokes.swift in Sources */,
 				B1E100000000000000000002 /* UnlockCoordinator.swift in Sources */,
 				B1E100000000000000000001 /* ProximityMonitor.swift in Sources */,
 				B1E100000000000000000000 /* Scheduler.swift in Sources */,
