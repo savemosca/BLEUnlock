@@ -1,4 +1,5 @@
 import Cocoa
+import UserNotifications
 
 private let KEY = "lastUpdateCheck"
 private let INTERVAL = 24.0 * 60 * 60
@@ -41,8 +42,9 @@ private func compareVersionsAndNotify(_ latestVersion: String) {
 }
 
 private func notify() {
-    let un = NSUserNotification()
-    un.title = "BLEUnlock"
-    un.subtitle = t("notification_update_available")
-    NSUserNotificationCenter.default.deliver(un)
+    let content = UNMutableNotificationContent()
+    content.title = "BLEUnlock"
+    content.subtitle = t("notification_update_available")
+    let request = UNNotificationRequest(identifier: UPDATE_NOTIFICATION_ID, content: content, trigger: nil)
+    UNUserNotificationCenter.current().add(request)
 }

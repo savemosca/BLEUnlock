@@ -1,13 +1,17 @@
 import Cocoa
 import Quartz
 import ServiceManagement
+import UserNotifications
 
 func t(_ key: String) -> String {
     return NSLocalizedString(key, comment: "")
 }
 
-@NSApplicationMain
-class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation, NSUserNotificationCenterDelegate, BLEDelegate {
+let LOCK_NOTIFICATION_ID = "lock"
+let UPDATE_NOTIFICATION_ID = "update"
+
+@main
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation, UNUserNotificationCenterDelegate, BLEDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let ble = BLE()
     let mainMenu = NSMenu()
@@ -22,7 +26,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     var displaySleep = false
     var systemSleep = false
     var connected = false
-    var userNotification: NSUserNotification?
     var nowPlayingWasPlaying = false
     var aboutBox: AboutBox? = nil
     var wakeTimer: Timer?
@@ -138,30 +141,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func notifyUser(_ reason: String) {
-        let un = NSUserNotification()
-        un.title = "BLEUnlock"
+        let content = UNMutableNotificationContent()
+        content.title = "BLEUnlock"
         if reason == "lost" {
-            un.subtitle = t("notification_lost_signal")
+            content.subtitle = t("notification_lost_signal")
         } else if reason == "away" {
-            un.subtitle = t("notification_device_away")
+            content.subtitle = t("notification_device_away")
         }
-        un.informativeText = t("notification_locked")
-        un.deliveryDate = Date().addingTimeInterval(1)
-        NSUserNotificationCenter.default.scheduleNotification(un)
-        userNotification = un
+        content.body = t("notification_locked")
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: LOCK_NOTIFICATION_ID, content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
     }
 
-    func userNotificationCenter(_ center: NSUserNotificationCenter,
-                                shouldPresent notification: NSUserNotification) -> Bool {
-        return true
+    func removeLockNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [LOCK_NOTIFICATION_ID])
+        center.removeDeliveredNotifications(withIdentifiers: [LOCK_NOTIFICATION_ID])
     }
 
-    func userNotificationCenter(_ center: NSUserNotificationCenter,
-                                didActivate notification: NSUserNotification) {
-        if notification != userNotification {
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.notification.request.identifier == UPDATE_NOTIFICATION_ID {
             NSWorkspace.shared.open(URL(string: "https://github.com/ts1/BLEUnlock/releases")!)
-            NSUserNotificationCenter.default.removeDeliveredNotification(notification)
+            center.removeDeliveredNotifications(withIdentifiers: [UPDATE_NOTIFICATION_ID])
         }
+        completionHandler()
     }
 
     func runScript(_ arg: String) {
@@ -204,7 +216,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
 
     func lockOrSaveScreen() {
         if prefs.bool(forKey: "screensaver") {
-            NSWorkspace.shared.launchApplication("ScreenSaverEngine")
+            let url = URL(fileURLWithPath: "/System/Library/CoreServices/ScreenSaverEngine.app")
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         } else {
             if SACLockScreenImmediate() != 0 {
                 print("Failed to lock screen")
@@ -219,10 +232,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     func updatePresence(presence: Bool, reason: String) {
         if presence {
             if ble.unlockRSSI != ble.UNLOCK_DISABLED {
-                if let un = userNotification {
-                    NSUserNotificationCenter.default.removeDeliveredNotification(un)
-                    userNotification = nil
-                }
+                removeLockNotification()
                 if displaySleep && !systemSleep && prefs.bool(forKey: "wakeOnProximity") {
                     print("Waking display")
                     wakeDisplay()
@@ -514,11 +524,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         ble.proximityTimeout = Double(value)
     }
 
+    func isLaunchAtLoginEnabled() -> Bool {
+        let status = SMAppService.mainApp.status
+        return status == .enabled || status == .requiresApproval
+    }
+
     @objc func toggleLaunchAtLogin(_ menuItem: NSMenuItem) {
-        let launchAtLogin = !prefs.bool(forKey: "launchAtLogin")
+        do {
+            if isLaunchAtLoginEnabled() {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            errorModal("Failed to change Launch at Login", info: error.localizedDescription)
+        }
+        if SMAppService.mainApp.status == .requiresApproval {
+            SMAppService.openSystemSettingsLoginItems()
+        }
+        let launchAtLogin = isLaunchAtLoginEnabled()
         prefs.set(launchAtLogin, forKey: "launchAtLogin")
         menuItem.state = launchAtLogin ? .on : .off
-        SMLoginItemSetEnabled(Bundle.main.bundleIdentifier! + ".Launcher" as CFString, launchAtLogin)
+    }
+
+    // Older versions used a helper app registered with the deprecated SMLoginItemSetEnabled.
+    // Move users who had it turned on to SMAppService, and remove the legacy helper registration.
+    func migrateLaunchAtLogin() {
+        guard prefs.bool(forKey: "launchAtLogin") else { return }
+        guard !prefs.bool(forKey: "launchAtLoginMigrated") else { return }
+        SMLoginItemSetEnabled(Bundle.main.bundleIdentifier! + ".Launcher" as CFString, false)
+        if SMAppService.mainApp.status == .notRegistered {
+            try? SMAppService.mainApp.register()
+        }
+        prefs.set(true, forKey: "launchAtLoginMigrated")
     }
 
     @objc func togglePauseNowPlaying(_ menuItem: NSMenuItem) {
@@ -649,7 +687,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         item.state = prefs.bool(forKey: "passiveMode") ? .on : .off
         
         item = mainMenu.addItem(withTitle: t("launch_at_login"), action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
-        item.state = prefs.bool(forKey: "launchAtLogin") ? .on : .off
+        item.state = isLaunchAtLoginEnabled() ? .on : .off
         
         mainMenu.addItem(withTitle: t("set_rssi_threshold"), action: #selector(setRSSIThreshold),
                          keyEquivalent: "")
@@ -674,6 +712,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     }
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        migrateLaunchAtLogin()
         if let button = statusItem.button {
             button.image = NSImage(named: "StatusBarDisconnected")
             constructMenu()
@@ -706,7 +745,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             ble.proximityTimeout = Double(lockDelay)
         }
 
-        NSUserNotificationCenter.default.delegate = self
+        let notificationCenter = UNUserNotificationCenter.current()
+        notificationCenter.delegate = self
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                print("Notification authorization failed: \(error)")
+            }
+        }
 
         let nc = NSWorkspace.shared.notificationCenter;
         nc.addObserver(self, selector: #selector(onDisplaySleep), name: NSWorkspace.screensDidSleepNotification, object: nil)

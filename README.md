@@ -24,7 +24,7 @@ This document is also available in [Japanese (日本語版はこちら)](README.
 ## Requirements
 
 - A Mac with Bluetooth Low Energy support
-- macOS 10.13 (High Sierra) or later
+- macOS 13 (Ventura) or later
 - iPhone 5s or newer, Apple Watch (all), or another BLE device that has [static MAC address](#notes-on-mac-address) and transmits signal periodically
 
 ## Installation

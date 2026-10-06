@@ -1,13 +1,18 @@
 name: CI
 
-on: [push]
+on: [push, pull_request]
+
+permissions:
+  contents: read
 
 jobs:
   build:
 
-    runs-on: macOS-latest
-    
+    runs-on: macos-latest
+
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Start xcodebuild test
-      run: xcodebuild clean build -project BLEUnlock.xcodeproj -scheme BLEUnlock
+      run: xcodebuild clean build -project BLEUnlock.xcodeproj -scheme BLEUnlock -configuration Debug CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
