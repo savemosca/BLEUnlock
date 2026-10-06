@@ -12,6 +12,9 @@
 "launch_at_login" = "Launch at Login";
 "lock_delay" = "Delay to Lock";
 "lock_now" = "Lock Screen Now";
+"lock_only" = "Lock Only (Unlock with macOS)";
+"lock_only_enabled" = "Lock Only mode is on";
+"lock_only_info" = "BLEUnlock will lock your Mac when the device is away, but it will never unlock it. The stored password has been removed from Keychain.\n\nTo unlock automatically when you come back, turn on \"Use Apple Watch to unlock your applications and your Mac\" in System Settings > Touch ID & Password (or Login Password). Turn on \"Wake on Proximity\" to wake the screen when you approach.";
 "lock_rssi" = "Lock RSSI";
 "minute" = "minute";
 "minutes" = "minutes";
@@ -21,8 +24,10 @@
 "notification_lost_signal" = "Signal is lost";
 "notification_update_available" = "Update is available.";
 "ok" = "OK";
+"open_system_settings" = "Open System Settings";
 "passive_mode" = "Passive Mode";
 "password_info" = "Your password will be securely stored in Keychain.";
+"password_info_lock_only_tip" = "Tip: if you have an Apple Watch, you can use \"Lock Only\" mode instead and let macOS unlock your Mac, so your password doesn't need to be stored.";
 "password_not_set" = "Password is not set.";
 "pause_now_playing" = "Pause \"Now Playing\" while Locked";
 "quit" = "Quit BLEUnlock";

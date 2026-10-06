@@ -3,8 +3,15 @@ import Quartz
 import ServiceManagement
 import UserNotifications
 
+// English strings, used when a key is missing from the current localization.
+private let baseStrings: NSDictionary? = {
+    guard let path = Bundle.main.path(forResource: "Localizable", ofType: "strings", inDirectory: nil, forLocalization: "Base") else { return nil }
+    return NSDictionary(contentsOfFile: path)
+}()
+
 func t(_ key: String) -> String {
-    return NSLocalizedString(key, comment: "")
+    let fallback = baseStrings?[key] as? String ?? key
+    return NSLocalizedString(key, tableName: nil, bundle: .main, value: fallback, comment: "")
 }
 
 let LOCK_NOTIFICATION_ID = "lock"
@@ -72,7 +79,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
+    // Lock Only: BLEUnlock locks the Mac but never types the password; unlocking is left to macOS
+    // (Apple Watch, Touch ID or password), so no password is kept in Keychain.
+    var lockOnly: Bool {
+        return prefs.bool(forKey: "lockOnly")
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(askPassword) || menuItem.action == #selector(toggleWakeWithoutUnlocking) {
+            return !lockOnly
+        }
         if menuItem.menu == lockRSSIMenu {
             return menuItem.tag <= ble.unlockRSSI
         } else if menuItem.menu == unlockRSSIMenu {
@@ -318,6 +334,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)?.post(tap: .cghidEventTap)
         }
 
+        guard !lockOnly else { return }
         guard !self.prefs.bool(forKey: "wakeWithoutUnlocking") else { return }
 
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false, block: { _ in
@@ -368,7 +385,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
     @objc func onUnlock() {
         Timer.scheduledTimer(withTimeInterval: 2, repeats: false, block: { _ in
             print("onUnlock")
-            if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
+            if self.lockOnly {
+                // macOS unlocked the screen: fine if the device is nearby, suspicious otherwise.
+                self.runScript(self.ble.presence ? "unlocked" : "intruded")
+                self.playNowPlaying()
+            } else if Date().timeIntervalSince1970 >= self.unlockedAt + 10 {
                 if self.ble.unlockRSSI != self.ble.UNLOCK_DISABLED {
                     self.runScript("intruded")
                 }
@@ -438,6 +459,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         }
     }
 
+    func deletePassword() {
+        let query: [String: Any] = [
+            String(kSecClass): kSecClassGenericPassword,
+            String(kSecAttrAccount): NSUserName(),
+            String(kSecAttrService): Bundle.main.bundleIdentifier ?? "BLEUnlock",
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     func fetchPassword(warn: Bool = false) -> String? {
         let query: [String: Any] = [
             String(kSecClass): kSecClassGenericPassword,
@@ -473,7 +503,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         msg.addButton(withTitle: t("ok"))
         msg.addButton(withTitle: t("cancel"))
         msg.messageText = t("enter_password")
-        msg.informativeText = t("password_info")
+        msg.informativeText = t("password_info") + "\n\n" + t("password_info_lock_only_tip")
         msg.window.title = "BLEUnlock"
 
         let txt = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 20))
@@ -600,6 +630,34 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         ble.setPassiveMode(passiveMode)
     }
 
+    func suggestNativeUnlock() {
+        let alert = NSAlert()
+        alert.messageText = t("lock_only_enabled")
+        alert.informativeText = t("lock_only_info")
+        alert.window.title = "BLEUnlock"
+        alert.addButton(withTitle: t("open_system_settings"))
+        alert.addButton(withTitle: t("ok"))
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.Touch-ID-Settings.extension")!)
+        }
+    }
+
+    @objc func toggleLockOnly(_ menuItem: NSMenuItem) {
+        let value = !lockOnly
+        prefs.set(value, forKey: "lockOnly")
+        menuItem.state = value ? .on : .off
+        if value {
+            deletePassword()
+            suggestNativeUnlock()
+        } else {
+            if ble.unlockRSSI != ble.UNLOCK_DISABLED && !prefs.bool(forKey: "wakeWithoutUnlocking") && fetchPassword() == nil {
+                askPassword()
+            }
+            checkAccessibility()
+        }
+    }
+
     @objc func toggleWakeWithoutUnlocking(_ menuItem: NSMenuItem) {
         let wakeWithoutUnlocking = !prefs.bool(forKey: "wakeWithoutUnlocking")
         prefs.set(wakeWithoutUnlocking, forKey: "wakeWithoutUnlocking")
@@ -671,6 +729,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         timeoutMenu.addItem(withTitle: "5 " + t("minutes"), action: #selector(setTimeout), keyEquivalent: "").tag = 300
         timeoutMenu.addItem(withTitle: "10 " + t("minutes"), action: #selector(setTimeout), keyEquivalent: "").tag = 600
         timeoutMenu.delegate = self
+
+        item = mainMenu.addItem(withTitle: t("lock_only"), action: #selector(toggleLockOnly), keyEquivalent: "")
+        item.state = lockOnly ? .on : .off
 
         item = mainMenu.addItem(withTitle: t("wake_on_proximity"), action: #selector(toggleWakeOnProximity), keyEquivalent: "")
         if prefs.bool(forKey: "wakeOnProximity") {
@@ -780,10 +841,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         dnc.addObserver(self, selector: #selector(onScreensaverStart), name: NSNotification.Name(rawValue: "com.apple.screensaver.didstart"), object: nil)
         dnc.addObserver(self, selector: #selector(onScreensaverStop), name: NSNotification.Name(rawValue: "com.apple.screensaver.didstop"), object: nil)
 
-        if ble.unlockRSSI != ble.UNLOCK_DISABLED && !prefs.bool(forKey: "wakeWithoutUnlocking") && fetchPassword() == nil {
-            askPassword()
+        if lockOnly {
+            // Accessibility is only needed to type the password.
+            deletePassword()
+        } else {
+            if ble.unlockRSSI != ble.UNLOCK_DISABLED && !prefs.bool(forKey: "wakeWithoutUnlocking") && fetchPassword() == nil {
+                askPassword()
+            }
+            checkAccessibility()
         }
-        checkAccessibility()
         checkUpdate()
 
         // Hide dock icon.
