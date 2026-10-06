@@ -402,16 +402,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
         // Consume the automatic attempt at the actual unlock notification.
         let automatic = unlockCoordinator.didUnlock()
         if lockOnly {
-            if ble.hasKnownPresence {
-                runScript(ble.presence ? "unlocked" : "intruded")
-            } else {
-                // Apple Watch can unlock before Bluetooth delivers the first post-wake
-                // reading. Allow the same settling time as the original event handler.
-                let timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-                    guard let self = self else { return }
-                    self.runScript(self.ble.presence ? "unlocked" : "intruded")
-                }
-                RunLoop.main.add(timer, forMode: .common)
+            // macOS unlocked the screen: fine if the device is within lock range, suspicious otherwise.
+            // Apple Watch can unlock before Bluetooth delivers the first post-wake reading.
+            ble.whenInRangeKnown(timeout: 10) { [weak self] inRange in
+                self?.runScript(inRange ? "unlocked" : "intruded")
             }
         } else if automatic {
             runScript("unlocked")
@@ -667,7 +661,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemVa
             case .complete:
                 prefs.set(true, forKey: "launchAtLoginMigrated")
             case .requiresApproval:
-                SMAppService.openSystemSettingsLoginItems()
+                // Ask once. The legacy login item keeps working until the user approves,
+                // and migration completes on the first launch after that.
+                if !prefs.bool(forKey: "launchAtLoginApprovalRequested") {
+                    prefs.set(true, forKey: "launchAtLoginApprovalRequested")
+                    SMAppService.openSystemSettingsLoginItems()
+                }
             case .unavailable:
                 errorModal("Failed to migrate Launch at Login", info: "The previous login item has been kept. Migration will be retried.")
             }

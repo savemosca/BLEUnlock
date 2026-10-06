@@ -86,7 +86,7 @@ Finally, from the menu bar icon, select *Device*.
 It starts scanning nearby BLE devices.
 Select your device, and you're done!
 
-BLEUnlock requires a valid signal from the selected device before it can unlock. After system sleep it waits for a fresh signal. If Bluetooth becomes unavailable while the Mac is awake, it treats the device as lost and locks the Mac unless locking is disabled.
+BLEUnlock requires a valid signal from the selected device before it can unlock. After system sleep it waits for a fresh signal: if the device was nearby when the Mac went to sleep, a first reading above the lock RSSI is enough, otherwise the device must reach the unlock RSSI. If Bluetooth is turned off while the Mac is awake, it treats the device as lost and locks the Mac unless locking is disabled. A brief restart of the system Bluetooth service does not lock the Mac; the device is reported lost only if no signal returns within the timeout.
 
 ## Options
 
@@ -97,7 +97,7 @@ Unlock RSSI | Bluetooth signal strength to unlock. Larger value indicates that t
 Lock RSSI | Bluetooth signal strength to lock. Smaller value indicates that the BLE device needs to be farther away from the Mac to lock. Choose *Disable* to disable locking.
 Delay to Lock | Duration of time before it locks the Mac when it detects that the BLE device is away. If the BLE device comes closer within that time, no lock will occur.
 No-Signal Timeout | Time between last signal reception and locking. If you experience frequent "Signal is lost" locking, increase this value.
-Lock Only (Unlock with macOS) | BLEUnlock only locks the Mac and never unlocks it, so your password is not stored (it is removed from Keychain when you turn this on) and Accessibility permission is not needed. Use the macOS built-in unlock with Apple Watch (System Settings > Touch ID & Password) to unlock, together with *Wake on Proximity* to wake the screen when you come back. The event script receives `unlocked` when the Mac is unlocked with the device nearby, `intruded` otherwise.
+Lock Only (Unlock with macOS) | BLEUnlock only locks the Mac and never unlocks it, so your password is not stored (it is removed from Keychain when you turn this on) and Accessibility permission is not needed. Use the macOS built-in unlock with Apple Watch (System Settings > Touch ID & Password) to unlock, together with *Wake on Proximity* to wake the screen when you come back. The event script receives `unlocked` when the Mac is unlocked with the device above the lock RSSI, `intruded` otherwise (including when no signal arrives within 10 seconds of the unlock).
 Wake on Proximity | Wakes up the display from sleep when the BLE device approaches while locking.
 Wake without Unlocking | BLEUnlock will not unlock the Mac when the display wakes up from sleep, whether automatically via "Wake on Proximity" or manually. This allows for compatibility with the macOS built-in unlock with Apple Watch feature (which can operate immediately after BLEUnlock wakes the screen), or if you just prefer the lock screen to appear more quickly but don't want it to auto-unlock.
 Pause "Now Playing" while Locked | On lock/unlock, BLEUnlock pauses/unpauses playback of music or video (including Apple Music, QuickTime Player and Spotify) that is controlled by *Now Playing* widget or the ⏯ key on the keyboard.

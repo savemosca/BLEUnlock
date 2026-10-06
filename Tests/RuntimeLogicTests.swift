@@ -166,6 +166,118 @@ final class ProximityMonitorTests: XCTestCase {
         monitor.receiveRSSI(-30)
         XCTAssertTrue(monitor.presence)
     }
+
+    func testReselectingSameThresholdKeepsPresence() {
+        let monitor = ProximityMonitor(scheduler: TestScheduler())
+        monitor.start()
+        monitor.receiveRSSI(-50)
+        monitor.unlockRSSI = -60
+        monitor.lockRSSI = -80
+        XCTAssertTrue(monitor.presence)
+    }
+
+    func testWakeRestoresPresenceFromFreshReadingWithinLockRange() {
+        let monitor = ProximityMonitor(scheduler: TestScheduler())
+        var reasons: [String] = []
+        monitor.onPresenceChanged = { _, reason in reasons.append(reason) }
+        monitor.start()
+        monitor.receiveRSSI(-50)
+        monitor.suspend()
+        monitor.resume()
+        XCTAssertFalse(monitor.presence)
+        monitor.receiveRSSI(-70)
+        XCTAssertTrue(monitor.presence)
+        XCTAssertEqual(reasons, ["close", "close"])
+    }
+
+    func testWakeRestoreNeedsFirstReadingWithinLockRange() {
+        let scheduler = TestScheduler()
+        let monitor = ProximityMonitor(scheduler: scheduler)
+        monitor.start()
+        monitor.receiveRSSI(-50)
+        monitor.suspend()
+        monitor.resume()
+        monitor.receiveRSSI(-90)
+        monitor.receiveRSSI(-70)
+        XCTAssertFalse(monitor.presence)
+    }
+
+    func testWakeWithoutPriorPresenceNeedsUnlockThreshold() {
+        let monitor = ProximityMonitor(scheduler: TestScheduler())
+        monitor.start()
+        monitor.receiveRSSI(-70)
+        monitor.suspend()
+        monitor.resume()
+        monitor.receiveRSSI(-70)
+        XCTAssertFalse(monitor.presence)
+        monitor.receiveRSSI(-50)
+        XCTAssertTrue(monitor.presence)
+    }
+
+    func testBluetoothLossDuringWakeCancelsRestore() {
+        let monitor = ProximityMonitor(scheduler: TestScheduler())
+        monitor.start()
+        monitor.receiveRSSI(-50)
+        monitor.suspend()
+        monitor.resume()
+        monitor.bluetoothUnavailable()
+        monitor.bluetoothAvailable()
+        monitor.receiveRSSI(-70)
+        XCTAssertFalse(monitor.presence)
+    }
+
+    func testDeviceBetweenThresholdsIsInRangeWithoutAuthorizingUnlock() {
+        let monitor = ProximityMonitor(scheduler: TestScheduler())
+        monitor.start()
+        XCTAssertNil(monitor.isInRange)
+        monitor.receiveRSSI(-70)
+        XCTAssertEqual(monitor.isInRange, true)
+        XCTAssertFalse(monitor.presence)
+        monitor.receiveRSSI(-95)
+        monitor.receiveRSSI(-95)
+        XCTAssertEqual(monitor.isInRange, false)
+    }
+
+    func testRangeWaiterResolvesWithFirstReadingAfterWake() {
+        let scheduler = TestScheduler()
+        let monitor = ProximityMonitor(scheduler: scheduler)
+        var results: [Bool] = []
+        monitor.start()
+        monitor.receiveRSSI(-70)
+        monitor.suspend()
+        // macOS can unlock before the delayed wake handler resumes monitoring.
+        monitor.whenRangeKnown(timeout: 10) { results.append($0) }
+        scheduler.advance(by: 1)
+        monitor.resume()
+        XCTAssertEqual(results, [])
+        monitor.receiveRSSI(-70)
+        XCTAssertEqual(results, [true])
+        scheduler.advance(by: 20)
+        XCTAssertEqual(results, [true])
+    }
+
+    func testRangeWaiterReportsOutOfRangeOnTimeoutOrLoss() {
+        let scheduler = TestScheduler()
+        let monitor = ProximityMonitor(scheduler: scheduler)
+        var results: [Bool] = []
+        monitor.start()
+        monitor.whenRangeKnown(timeout: 10) { results.append($0) }
+        scheduler.advance(by: 10)
+        XCTAssertEqual(results, [false])
+        monitor.start()
+        monitor.whenRangeKnown(timeout: 10) { results.append($0) }
+        monitor.bluetoothUnavailable()
+        XCTAssertEqual(results, [false, false])
+    }
+
+    func testRangeWaiterIsIgnoredWithoutMonitoredDevice() {
+        let scheduler = TestScheduler()
+        let monitor = ProximityMonitor(scheduler: scheduler)
+        var results: [Bool] = []
+        monitor.whenRangeKnown(timeout: 10) { results.append($0) }
+        scheduler.advance(by: 20)
+        XCTAssertEqual(results, [])
+    }
 }
 
 final class UnlockCoordinatorTests: XCTestCase {

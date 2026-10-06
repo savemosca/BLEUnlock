@@ -125,7 +125,6 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     var monitoredPeripheral: CBPeripheral?
     private let proximity = ProximityMonitor()
     var presence: Bool { proximity.presence }
-    var hasKnownPresence: Bool { proximity.hasKnownPresence }
     var lockRSSI: Int {
         get { proximity.lockRSSI }
         set { proximity.lockRSSI = newValue }
@@ -209,6 +208,7 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
         systemSleeping = true
         proximity.suspend()
         cancelConnectionTimers()
+        guard centralMgr.state == .poweredOn else { return }
         centralMgr.stopScan()
         if let p = monitoredPeripheral {
             centralMgr.cancelPeripheralConnection(p)
@@ -218,11 +218,14 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     func resumeMonitoring() {
         systemSleeping = false
         proximity.resume()
-        if centralMgr.state == .poweredOn {
-            scanForPeripherals()
-        } else {
-            proximity.bluetoothUnavailable()
-        }
+        // Bluetooth is often still powering up right after wake. Its next state change is
+        // handled below, and the signal timeout reports the device lost if it stays off.
+        scanForPeripherals()
+    }
+
+    // Calls `completion` with whether the device is within lock range once a fresh reading is known.
+    func whenInRangeKnown(timeout: TimeInterval, _ completion: @escaping (Bool) -> Void) {
+        proximity.whenRangeKnown(timeout: timeout, completion)
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -232,9 +235,19 @@ class BLE: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
             proximity.bluetoothAvailable()
             if activeModeTimer == nil { scanForPeripherals() }
             powerWarn = false
-        case .poweredOff, .unauthorized, .unsupported, .resetting:
+        case .resetting:
+            // The system Bluetooth service restarted and will report its state again shortly.
+            // Keep the presence; the signal timeout still reports the device lost if it does not recover.
+            print("Bluetooth resetting")
+            cancelConnectionTimers()
+            monitoredPeripheral = nil
+        case .poweredOff, .unauthorized, .unsupported:
             print("Bluetooth unavailable")
             cancelConnectionTimers()
+            if central.state != .poweredOff {
+                // Peripherals become invalid when the state drops below powered off.
+                monitoredPeripheral = nil
+            }
             proximity.bluetoothUnavailable()
             if central.state == .poweredOff && powerWarn && !systemSleeping {
                 powerWarn = false
